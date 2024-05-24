@@ -1,5 +1,7 @@
 from datetime import date
-from flask import Flask, abort, render_template, redirect, url_for, flash
+import os
+import smtplib
+from flask import Flask, abort, render_template, redirect, url_for, flash, request
 from flask_bootstrap import Bootstrap5
 from flask_ckeditor import CKEditor
 from flask_gravatar import Gravatar
@@ -13,10 +15,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from forms import CreatePostForm, RegisterForm, LoginForm, CommentForm
 
 
+PASSWORD = os.environ.get('PASSWORD')
+EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
 
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = '8BYkEfBA6O6donzWlSihBXox7C0sKR6b'
+app.config['SECRET_KEY'] = os.environ.get('FLASK_KEY')
 ckeditor = CKEditor(app)
 Bootstrap5(app)
 
@@ -25,9 +29,13 @@ Bootstrap5(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 # CREATE DATABASE
+
+
 class Base(DeclarativeBase):
     pass
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///posts.db'
+
+
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DB_URI')
 db = SQLAlchemy(model_class=Base)
 db.init_app(app)
 
@@ -36,7 +44,7 @@ db.init_app(app)
 class BlogPost(db.Model):
     __tablename__ = "blog_posts"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    author_id: Mapped[int] = mapped_column(Integer, db.ForeignKey("users.id"))
+    author_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
     author = relationship("User", back_populates="posts")
     title: Mapped[str] = mapped_column(String(250), unique=True, nullable=False)
     subtitle: Mapped[str] = mapped_column(String(250), nullable=False)
@@ -44,7 +52,6 @@ class BlogPost(db.Model):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     img_url: Mapped[str] = mapped_column(String(250), nullable=False)
     comments = relationship("Comment", back_populates="parent_post")
-
 
 
 # TODO: Create a User table for all your registered users.
@@ -57,11 +64,12 @@ class User(UserMixin, db.Model):
     posts = relationship("BlogPost", back_populates="author")
     comments = relationship("Comment", back_populates="comment_author")
 
+
 class Comment(UserMixin, db.Model):
     __tablename__ = "comments"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    author_id: Mapped[int] = mapped_column(Integer, db.ForeignKey("users.id"))
+    author_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
     comment_author = relationship("User", back_populates="comments")
     post_id: Mapped[int] = mapped_column(Integer, db.ForeignKey("blog_posts.id"))
     parent_post = relationship("BlogPost", back_populates="comments")
@@ -78,6 +86,8 @@ gravatar = Gravatar(app,
                     force_lower=False,
                     use_ssl=False,
                     base_url=None)
+
+
 def admin_only(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -86,11 +96,14 @@ def admin_only(f):
         return f(*args, **kwargs)
     return decorated_function
 
+
 @login_manager.user_loader
 def load_user(user_id):
     return db.get_or_404(User, user_id)
 
 # TODO: Use Werkzeug to hash the user's password when creating a new user.
+
+
 @app.route('/register', methods=["GET", "POST"])
 def register():
     form = RegisterForm()
@@ -121,15 +134,15 @@ def login():
     if form.validate_on_submit():
         pwd = form.password.data
         email = form.email.data
-        useR = db.session.execute(db.select(User).where(User.email == email)).scalar()
-        if not useR:
+        user = db.session.execute(db.select(User).where(User.email == email)).scalar()
+        if not user:
             flash("Incorrect email")
             return redirect(url_for('login'))
-        elif not check_password_hash(useR.password, pwd):
+        elif not check_password_hash(user.password, pwd):
             flash("Incorrect password")
             return redirect(url_for('login'))
         else:
-            login_user(useR)
+            login_user(user)
             return redirect(url_for('get_all_posts', logged_in=current_user.is_authenticated))
     return render_template("login.html", form=form)
 
@@ -225,10 +238,21 @@ def about():
     return render_template("about.html")
 
 
-@app.route("/contact")
+@app.route("/contact", methods=["GET", "POST"])
 def contact():
-    return render_template("contact.html")
+    if request.method == "POST":
+        data = request.form
+        send_email(data["name"], data["email"], data["phone"], data["message"])
+        return render_template("contact.html", msg_sent=True)
+    return render_template("contact.html", msg_sent=False)
 
+
+ def send_email(name, email, phone, message):
+    email_message = f"Subject:New Message\n\nName: {name}\nEmail: {email}\nPhone: {phone}\nMessage:{message}"
+    with smtplib.SMTP("smtp.gmail.com", port=587) as connection:
+        connection.starttls()
+        connection.login(EMAIL_ADDRESS, PASSWORD)
+        connection.sendmail(EMAIL_ADDRESS, PASSWORD, email_message)
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5002)
+    app.run(debug=False, port=5002)
